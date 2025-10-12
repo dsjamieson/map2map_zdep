@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.multiprocessing import spawn
 from torch.func import jvp
+from torch.amp import autocast
 
 from .data.run_fields import RunFieldDataset
 from .data import norms
@@ -51,7 +52,6 @@ def worker(local_rank, node, args):
     if torch.cuda.is_available():
         os.environ["TORCH_DISTRIBUTED_DEBUG"]="DETAIL"
         os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-        #os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
         device = torch.device('cuda', local_rank)
         torch.backends.cudnn.benchmark = True
         rank = args.gpus_per_node * node + local_rank
@@ -68,7 +68,10 @@ def worker(local_rank, node, args):
         rank=rank,
         timeout=datetime.timedelta(seconds=14400)
     )
-    dist.barrier()
+    if torch.cuda.is_available():
+        dist.barrier(device_ids=[local_rank])
+    else:
+        dist.barrier()
     if rank == 0:
         os.remove(dist_file)
 
@@ -92,7 +95,9 @@ def worker(local_rank, node, args):
         shuffle=False,
         num_workers=args.loader_workers,
         pin_memory=True,
-    )
+        prefetch_factor=4,
+        persistent_workers=True,
+        )
 
     style_size = run_dataset.style_size
     in_chan = run_dataset.in_chan
@@ -101,7 +106,7 @@ def worker(local_rank, node, args):
     model = import_attr("nbody.NbodyD2DStyledVNet", models)
     model = model(style_size, in_chan, out_chan)
     model.to(device)
-    state = torch.load(os.path.dirname(__file__) + "/model_parameters/nbody_params.pt", map_location=device)
+    state = torch.load(os.path.dirname(__file__) + "/model_parameters/zdep_d2d.pt", map_location=device)
     load_model_state_dict(model, state['model'])
     model.eval()
 
@@ -133,19 +138,20 @@ def run(run_loader, model, device, no_dis, no_vel) :
             Om = data['Om'].to(torch.float32).to(device, non_blocking=True)
             Dz = data['Dz'].to(torch.float32).to(device, non_blocking=True)
 
-            if not no_vel :
-                model_eval = lambda tDz : model(input, Om, tDz)
-                jvp_dir = torch.tensor([1.]).to(device, non_blocking=True)
-                (dis_out, s), (vel_out, ds) = jvp(model_eval, (Dz,), (jvp_dir,))
+            with autocast('cuda', dtype=torch.float16):
+                if not no_vel :
+                    model_eval = lambda tDz : model(input, Om, tDz)
+                    jvp_dir = torch.ones_like(Dz)
+                    (dis_out, s), (vel_out, ds) = jvp(model_eval, (Dz,), (jvp_dir,))
 
-                z, Om = data['redshift'], data['Om']
-                vel_norm = torch.ones(1, dtype=torch.float64)
-                norms.cosmology.vel(vel_norm, undo=True, Om=Om, z=z)
-                vel_norm = vel_norm.to(torch.float32).to(device, non_blocking=True)
-                vel_out = vel_out * vel_norm
+                    z, Om = data['redshift'], data['Om']
+                    vel_norm = torch.ones(1, dtype=torch.float64)
+                    norms.cosmology.vel(vel_norm, undo=True, Om=Om, z=z)
+                    vel_norm = vel_norm.to(torch.float32).to(device, non_blocking=True)
+                    vel_out = vel_out * vel_norm
 
-            else :
-                dis_out, s = model(input, Om, Dz)
+                else :
+                    dis_out, s = model(input, Om, Dz)
             
             if not no_dis :
                 dis_out = dis_out / dis_norm

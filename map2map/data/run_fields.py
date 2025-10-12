@@ -116,13 +116,7 @@ class RunFieldDataset(FieldDataset):
         
         mock, crop_num = divmod(idx, self.ncrop)
 
-        # use memmap after reading a file once
-        if not self.is_read[mock] :
-            mmap_mode = None
-            self.is_read[mock] = True
-        else:
-            mmap_mode = 'r'
-            
+        mmap_mode = 'r'
         dis_in_filename = self.in_files[mock]
         in_fields = [np.load(dis_in_filename, mmap_mode=mmap_mode)]
         Om, redshift = np.load(self.style_files[mock])[self.style_col]
@@ -134,6 +128,8 @@ class RunFieldDataset(FieldDataset):
         # so before that they themselves need perm() in the opposite ways
         argsort_perm_axes = slice(None)
         crop(in_fields, anchor, self.crop[argsort_perm_axes], self.in_pad[argsort_perm_axes])
+
+        in_fields = [np.ascontiguousarray(f) for f in in_fields]
         in_fields = [torch.from_numpy(f).to(torch.float32) for f in in_fields]
         in_fields = torch.cat(in_fields, dim=0)
 

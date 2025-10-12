@@ -15,10 +15,11 @@ class NbodyD2DStyledVNet(StyledVNet):
         # Construct the style parameters
         s0 = (Om - 0.3) * 5.
         s1 = (Dz - 1.)
-        s = torch.cat((s0.unsqueeze(0), s1.unsqueeze(0)), dim=1)
+        s = torch.stack([s0, s1], dim=-1)
 
         # Rescale the ZA field
-        x = x * Dz
+        Dz_bc = Dz.view(-1, 1, 1, 1, 1) if Dz.dim() == 1 else Dz
+        x = x * Dz_bc
 
         x = super().forward(x, s)
 

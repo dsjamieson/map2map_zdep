@@ -165,8 +165,11 @@ class ConvStyled3d(nn.Module):
         w = w.reshape(N * C0, C1, *K3)
         #print("    CS wreshap: %.2e GB" % (torch.cuda.memory_allocated(0)/1024/1024/1024))
         x = x.reshape(1, N * Cin, *DHWin)
+
+        bias = self.bias.repeat(N)  # [Cout] -> [N * Cout]
+
         #print("    CS xreshap: %.2e GB" % (torch.cuda.memory_allocated(0)/1024/1024/1024))
-        x = self.conv(x, w, bias=self.bias, stride=self.stride, groups=N)
+        x = self.conv(x, w, bias=bias, stride=self.stride, groups=N)
         #print("    CS conv   : %.2e GB" % (torch.cuda.memory_allocated(0)/1024/1024/1024), x.shape, w.shape)
         _, _, *DHWout = x.shape
         #print("    CS dhwout : %.2e GB" % (torch.cuda.memory_allocated(0)/1024/1024/1024))
