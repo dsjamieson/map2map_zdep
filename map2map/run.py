@@ -106,7 +106,7 @@ def worker(local_rank, node, args):
     model = import_attr("nbody.NbodyD2DStyledVNet", models)
     model = model(style_size, in_chan, out_chan)
     model.to(device)
-    state = torch.load(os.path.dirname(__file__) + "/model_parameters/zdep_d2d.pt", map_location=device)
+    state = torch.load(os.path.dirname(__file__) + "/model_parameters/zdep_d2d.pt", map_location=device, weights_only=True)
     load_model_state_dict(model, state['model'])
     model.eval()
 
