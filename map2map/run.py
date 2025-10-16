@@ -28,7 +28,8 @@ def node_worker(args):
     elif 'SLURM_JOB_NUM_NODES' in os.environ:
         args.nodes = int(os.environ['SLURM_JOB_NUM_NODES'])
     else:
-        raise KeyError('missing node counts in slurm env')
+        args.nodes = 1  # fallback for local run
+        os.environ['SLURM_NODEID'] = '0'
     args.threads_per_node = int(os.environ['SLURM_CPUS_ON_NODE'])
     if args.num_threads != -1 :
         if args.threads_per_node > args.num_threads :
