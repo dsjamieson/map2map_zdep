@@ -19,32 +19,41 @@ from .utils import import_attr, load_model_state_dict
 
 def node_worker(args):
 
-    if args.no_dis and args.no_vel :
-        print("Asked for no_dis and no_vel, nothing to do, exiting")
+    if args.no_dis and args.no_vel:
+        print("Nothing to do (no_dis and no_vel set). Exiting.")
         exit()
 
+    # Nodes
     if 'SLURM_STEP_NUM_NODES' in os.environ:
         args.nodes = int(os.environ['SLURM_STEP_NUM_NODES'])
     elif 'SLURM_JOB_NUM_NODES' in os.environ:
         args.nodes = int(os.environ['SLURM_JOB_NUM_NODES'])
     else:
-        args.nodes = 1  # fallback for local run
-        os.environ['SLURM_NODEID'] = '0'
-    args.threads_per_node = int(os.environ['SLURM_CPUS_ON_NODE'])
-    if args.num_threads != -1 :
-        if args.threads_per_node > args.num_threads :
-            args.threads_per_node = arg.num_threads
+        args.nodes = 1
 
+    # Threads per node
+    if 'SLURM_CPUS_ON_NODE' in os.environ:
+        args.threads_per_node = int(os.environ['SLURM_CPUS_ON_NODE'])
+    else:
+        args.threads_per_node = os.cpu_count()
+
+    if args.num_threads != -1 and args.threads_per_node > args.num_threads:
+        args.threads_per_node = args.num_threads
+
+    # Node ID
+    node = int(os.environ.get('SLURM_NODEID', 0))
+
+    # GPUs / world size
     if torch.cuda.is_available():
         args.gpus_per_node = torch.cuda.device_count()
         args.workers_per_node = args.gpus_per_node
         args.world_size = args.nodes * args.gpus_per_node
         args.dist_backend = 'nccl'
-    else :
+    else:
+        args.gpus_per_node = 0
         args.workers_per_node = 1
         args.world_size = args.nodes
         args.dist_backend = 'gloo'
-    node = int(os.environ['SLURM_NODEID'])
 
     spawn(worker, args=(node, args), nprocs=args.workers_per_node)
 
@@ -56,10 +65,12 @@ def worker(local_rank, node, args):
         device = torch.device('cuda', local_rank)
         torch.backends.cudnn.benchmark = True
         rank = args.gpus_per_node * node + local_rank
+        autocast_ctx = autocast('cuda', dtype=torch.float16)
     else:  # CPU multithreading
         device = torch.device('cpu')
         rank = local_rank
         torch.set_num_threads(args.threads_per_node)
+        autocast_ctx = torch.no_grad()  # CPU fallback
 
     dist_file = os.path.join(os.getcwd(), 'dist_addr')
     dist.init_process_group(
@@ -111,9 +122,9 @@ def worker(local_rank, node, args):
     load_model_state_dict(model, state['model'])
     model.eval()
 
-    run(run_loader, model, device, args.no_dis, args.no_vel)
+    run(run_loader, model, device, args.no_dis, args.no_vel, autocast_ctx)
 
-def run(run_loader, model, device, no_dis, no_vel) :
+def run(run_loader, model, device, no_dis, no_vel, autocast_ctx) :
 
     rank = dist.get_rank()
 
@@ -139,7 +150,7 @@ def run(run_loader, model, device, no_dis, no_vel) :
             Om = data['Om'].to(torch.float32).to(device, non_blocking=True)
             Dz = data['Dz'].to(torch.float32).to(device, non_blocking=True)
 
-            with autocast('cuda', dtype=torch.float16):
+            with autocast_ctx:
                 if not no_vel :
                     model_eval = lambda tDz : model(input, Om, tDz)
                     jvp_dir = torch.ones_like(Dz)
